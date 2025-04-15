@@ -30,6 +30,7 @@ from langgraph.utils.config import merge_configs
 from langgraph.utils.runnable import RunnableCallable, RunnableSeq
 
 READ_TYPE = Callable[[Union[str, Sequence[str]], bool], Union[Any, dict[str, Any]]]
+INPUT_CACHE_KEY_TYPE = tuple[Callable[..., Any], tuple[str, ...]]
 
 
 class ChannelRead(RunnableCallable):
@@ -67,6 +68,7 @@ class ChannelRead(RunnableCallable):
             afunc=self._aread,
             tags=tags,
             name=None,
+            trace=False,
             func_accepts_config=True,
         )
         self.fresh = fresh
@@ -144,8 +146,8 @@ class PregelNode(Runnable):
     """The main logic of the node. This will be invoked with the input from 
     `channels`."""
 
-    retry_policy: Optional[RetryPolicy]
-    """The retry policy to use when invoking the node."""
+    retry_policy: Optional[Sequence[RetryPolicy]]
+    """The retry policies to use when invoking the node."""
 
     tags: Optional[Sequence[str]]
     """Tags to attach to the node for tracing."""
@@ -166,7 +168,7 @@ class PregelNode(Runnable):
         tags: Optional[list[str]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         bound: Optional[Runnable[Any, Any]] = None,
-        retry_policy: Optional[RetryPolicy] = None,
+        retry_policy: Optional[Union[RetryPolicy, Sequence[RetryPolicy]]] = None,
         subgraphs: Optional[Sequence[PregelProtocol]] = None,
     ) -> None:
         self.channels = channels
@@ -174,7 +176,10 @@ class PregelNode(Runnable):
         self.mapper = mapper
         self.writers = writers or []
         self.bound = bound if bound is not None else DEFAULT_BOUND
-        self.retry_policy = retry_policy
+        if isinstance(retry_policy, RetryPolicy):
+            self.retry_policy: Sequence[RetryPolicy] = (retry_policy,)
+        else:
+            self.retry_policy = retry_policy
         self.tags = tags
         self.metadata = metadata
         if subgraphs is not None:
@@ -227,6 +232,17 @@ class PregelNode(Runnable):
             return RunnableSeq(self.bound, *writers)
         else:
             return self.bound
+
+    @cached_property
+    def input_cache_key(self) -> INPUT_CACHE_KEY_TYPE:
+        """Get a cache key for the input to the node.
+        This is used to avoid calculating the same input multiple times."""
+        return (
+            self.mapper,
+            tuple(f"{key}:{value}" for key, value in self.channels.items())
+            if isinstance(self.channels, dict)
+            else tuple(self.channels),
+        )
 
     def join(self, channels: Sequence[str]) -> PregelNode:
         assert isinstance(channels, list) or isinstance(
