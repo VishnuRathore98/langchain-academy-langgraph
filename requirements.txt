@@ -5,3 +5,4 @@ langchain-groq
 langchain_community
 langchain
 pydantic
+langgraph-checkpoint-sqlite
